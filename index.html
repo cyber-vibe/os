@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>XP Desktop Explorer</title>
+<link rel="stylesheet" href="https://unpkg.com/xp.css">
+<style>
+html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    font-family: Tahoma, sans-serif;
+    background: url("bliss.jpg") no-repeat center center fixed;
+    background-size: cover;
+}
+
+#desktop {
+    width: 100%;
+    height: 100%;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, 90px);
+    grid-auto-rows: 90px;
+    gap: 12px;
+    padding: 50px 20px 20px 20px;
+    box-sizing: border-box;
+    position: relative;
+}
+
+#goUpButton {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    z-index: 1000;
+    padding: 4px 8px;
+    background: #ece9d8;
+    border: 1px solid black;
+    cursor: pointer;
+}
+
+#goUpButton:hover {
+    background: #316ac5;
+    color: white;
+}
+
+.icon {
+    text-align: center;
+    color: white;
+    text-shadow: 1px 1px 2px black;
+    cursor: default;
+    user-select: none;
+}
+
+.icon:hover {
+    background: rgba(255,255,255,0.2);
+    border: 1px solid rgba(255,255,255,0.3);
+}
+
+.icon img {
+    width: 48px;
+    height: 48px;
+    pointer-events: none;
+}
+
+.icon span {
+    font-size: 11px;
+    display: block;
+    margin-top: 4px;
+}
+
+#editorWindow {
+    position: absolute;
+    top: 120px;
+    left: 120px;
+    width: 500px;
+    height: 350px;
+    display: none;
+    z-index: 1000;
+}
+
+#editorArea {
+    flex: 1;
+    resize: none;
+    font-family: Consolas, monospace;
+    font-size: 12px;
+}
+
+.resize-handle {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 14px;
+    height: 14px;
+    cursor: se-resize;
+}
+
+.context-menu {
+    position: absolute;
+    display: none;
+    background: #ece9d8;
+    border: 1px solid black;
+    list-style: none;
+    padding: 2px;
+    margin: 0;
+    z-index: 9999;
+    width: 150px;
+    font-size: 12px;
+}
+
+.context-menu li {
+    padding: 4px 8px;
+    cursor: pointer;
+}
+
+.context-menu li:hover {
+    background: #316ac5;
+    color: white;
+}
+</style>
+</head>
+<body>
+
+<div id="desktop">
+    <button id="goUpButton" style="display:none;">Go Up</button>
+</div>
+
+<div id="editorWindow" class="window">
+    <div class="title-bar" id="titleBar">
+        <div class="title-bar-text" id="editorTitle">Editor</div>
+        <div class="title-bar-controls">
+            <button aria-label="Close" id="closeEditor"></button>
+        </div>
+    </div>
+    <div class="window-body" style="height: calc(100% - 30px); display: flex; flex-direction: column;">
+        <textarea id="editorArea"></textarea>
+        <button id="saveFile">Save</button>
+    </div>
+    <div class="resize-handle"></div>
+</div>
+
+<ul id="contextMenu" class="context-menu">
+    <li data-action="openFolder">Open Folder</li>
+    <li data-action="copy">Copy</li>
+    <li data-action="paste">Paste</li>
+    <li data-action="newFile">New File</li>
+    <li data-action="newFolder">New Folder</li>
+    <li data-action="rename">Rename</li>
+
+    <!-- ADDED -->
+    <li data-action="delete">Delete</li>
+</ul>
+
+<script>
+const desktop = document.getElementById("desktop");
+const contextMenu = document.getElementById("contextMenu");
+const goUpButton = document.getElementById("goUpButton");
+
+const editorWindow = document.getElementById("editorWindow");
+const editorArea = document.getElementById("editorArea");
+const editorTitle = document.getElementById("editorTitle");
+const closeEditor = document.getElementById("closeEditor");
+const saveFile = document.getElementById("saveFile");
+const titleBar = document.getElementById("titleBar");
+const resizeHandle = document.querySelector(".resize-handle");
+
+const FOLDER_ICON = "folder.png";
+const FILE_ICON = "file.png";
+
+let rootDir = null;
+let currentDir = null;
+let dirStack = [];
+let selectedEntry = null;
+let copiedEntry = null;
+let currentFile = null;
+
+// Auto open folder on load
+(async () => {
+    try {
+        rootDir = await window.showDirectoryPicker();
+        currentDir = rootDir;
+        dirStack = [];
+        refresh();
+    } catch {}
+})();
+
+// Refresh desktop icons
+async function refresh() {
+    desktop.querySelectorAll(".icon").forEach(el => el.remove());
+    if (!currentDir) return;
+
+    for await (const entry of currentDir.values()) {
+        createIcon(entry);
+    }
+
+    goUpButton.style.display = dirStack.length > 0 ? "block" : "none";
+}
+
+// Create desktop icon
+function createIcon(entry) {
+    const icon = document.createElement("div");
+    icon.className = "icon";
+
+    icon.innerHTML = `
+        <img src="${entry.kind === 'directory' ? FOLDER_ICON : FILE_ICON}">
+        <span>${entry.name}</span>
+    `;
+
+    icon.onclick = () => selectedEntry = entry;
+
+    icon.ondblclick = async () => {
+        if (entry.kind === 'file') {
+            openEditor(entry);
+        } else if (entry.kind === 'directory') {
+            dirStack.push(currentDir);
+            currentDir = await currentDir.getDirectoryHandle(entry.name);
+            refresh();
+        }
+    };
+
+    icon.oncontextmenu = e => {
+        e.preventDefault();
+        selectedEntry = entry;
+        showMenu(e.clientX, e.clientY);
+    };
+
+    desktop.appendChild(icon);
+}
+
+// Go Up button
+goUpButton.onclick = async () => {
+    if (dirStack.length === 0) return;
+    currentDir = dirStack.pop();
+    refresh();
+};
+
+// Show context menu
+desktop.oncontextmenu = e => {
+    e.preventDefault();
+    if (!e.target.closest(".icon")) selectedEntry = null;
+    showMenu(e.clientX, e.clientY);
+};
+
+document.onclick = () => contextMenu.style.display = "none";
+
+function showMenu(x, y) {
+    contextMenu.style.left = x + "px";
+    contextMenu.style.top = y + "px";
+    contextMenu.style.display = "block";
+}
+
+// Recursive copy for folders
+async function copyFolder(src, dest) {
+    for await (const entry of src.values()) {
+        if (entry.kind === "file") {
+            const f = await entry.getFile();
+            const h = await dest.getFileHandle(entry.name, { create: true });
+            const w = await h.createWritable();
+            await w.write(await f.text());
+            await w.close();
+        } else if (entry.kind === "directory") {
+            const newDir = await dest.getDirectoryHandle(entry.name, { create: true });
+            await copyFolder(entry, newDir);
+        }
+    }
+}
+
+// Context menu actions
+contextMenu.onclick = async e => {
+    const action = e.target.dataset.action;
+    if (!action) return;
+
+    contextMenu.style.display = "none";
+
+    if (action === "openFolder") {
+        try {
+            const f = await window.showDirectoryPicker();
+            rootDir = f;
+            currentDir = rootDir;
+            dirStack = [];
+            refresh();
+        } catch {}
+        return;
+    }
+
+    if (action === "copy") {
+        copiedEntry = selectedEntry;
+        return;
+    }
+
+    if (action === "paste" && copiedEntry) {
+        if (!currentDir) return;
+
+        try {
+            if (copiedEntry.kind === "file") {
+                const f = await copiedEntry.getFile();
+                const h = await currentDir.getFileHandle(copiedEntry.name, { create: true });
+                const w = await h.createWritable();
+                await w.write(await f.text());
+                await w.close();
+            } else if (copiedEntry.kind === "directory") {
+                const newDir = await currentDir.getDirectoryHandle(copiedEntry.name, { create: true });
+                await copyFolder(copiedEntry, newDir);
+            }
+            refresh();
+        } catch (err) {
+            alert("Paste failed: " + err.message);
+        }
+
+        return;
+    }
+
+    if (action === "newFile") {
+        if (!currentDir) return;
+        const name = prompt("File name:", "New File.txt");
+        if (!name) return;
+        try {
+            const h = await currentDir.getFileHandle(name, { create: true });
+            refresh();
+            openEditor(h);
+        } catch (err) {
+            alert("Failed to create file: " + err.message);
+        }
+        return;
+    }
+
+    if (action === "newFolder") {
+        if (!currentDir) return;
+        const name = prompt("Folder name:", "New Folder");
+        if (!name) return;
+        try {
+            await currentDir.getDirectoryHandle(name, { create: true });
+            refresh();
+        } catch (err) {
+            alert("Failed to create folder: " + err.message);
+        }
+        return;
+    }
+
+    if (action === "rename" && selectedEntry) {
+        if (!currentDir) return;
+        const oldName = selectedEntry.name;
+        const newName = prompt("Enter new name:", oldName);
+        if (!newName || newName === oldName) return;
+
+        try {
+            if (selectedEntry.kind === "file") {
+                const f = await selectedEntry.getFile();
+                const newHandle = await currentDir.getFileHandle(newName, { create: true });
+                const w = await newHandle.createWritable();
+                await w.write(await f.text());
+                await w.close();
+                await currentDir.removeEntry(oldName);
+            } else if (selectedEntry.kind === "directory") {
+                const newDirHandle = await currentDir.getDirectoryHandle(newName, { create: true });
+                await copyFolder(selectedEntry, newDirHandle);
+                await currentDir.removeEntry(oldName, { recursive: true });
+            }
+
+            refresh();
+        } catch (err) {
+            alert("Rename failed: " + err.message);
+        }
+        return;
+    }
+
+    /* -------------- DELETE (ADDED) -------------- */
+    if (action === "delete" && selectedEntry) {
+        if (!currentDir) return;
+
+        const confirmMsg = `Delete "${selectedEntry.name}"?`;
+        if (!confirm(confirmMsg)) return;
+
+        try {
+            if (selectedEntry.kind === "file") {
+                await currentDir.removeEntry(selectedEntry.name);
+            } else if (selectedEntry.kind === "directory") {
+                await currentDir.removeEntry(selectedEntry.name, { recursive: true });
+            }
+
+            selectedEntry = null;
+            refresh();
+        } catch (err) {
+            alert("Delete failed: " + err.message);
+        }
+
+        return;
+    }
+};
+
+// Editor functions
+async function openEditor(handle) {
+    currentFile = handle;
+    const f = await handle.getFile();
+    editorTitle.textContent = f.name;
+    editorArea.value = await f.text();
+    editorWindow.style.display = "block";
+}
+
+saveFile.onclick = async () => {
+    if (!currentFile) return;
+    const w = await currentFile.createWritable();
+    await w.write(editorArea.value);
+    await w.close();
+};
+
+closeEditor.onclick = () => editorWindow.style.display = "none";
+
+// Drag editor
+let drag = false, dx = 0, dy = 0;
+titleBar.onmousedown = e => {
+    drag = true;
+    dx = e.clientX - editorWindow.offsetLeft;
+    dy = e.clientY - editorWindow.offsetTop;
+};
+
+document.onmousemove = e => {
+    if (!drag) return;
+    editorWindow.style.left = Math.max(0, e.clientX - dx) + "px";
+    editorWindow.style.top = Math.max(0, e.clientY - dy) + "px";
+};
+
+document.onmouseup = () => drag = false;
+
+// Resize editor
+resizeHandle.onmousedown = e => {
+    e.preventDefault();
+    document.onmousemove = ev => {
+        editorWindow.style.width = Math.max(200, ev.clientX - editorWindow.offsetLeft) + "px";
+        editorWindow.style.height = Math.max(100, ev.clientY - editorWindow.offsetTop) + "px";
+    };
+    document.onmouseup = () => document.onmousemove = null;
+};
+</script>
+</body>
+</html>
